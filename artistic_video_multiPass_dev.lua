@@ -63,8 +63,8 @@ cmd:option('-save_init', false, 'Whether the initialization image should be save
 -- Other options
 cmd:option('-style_scale', 1.0)
 cmd:option('-pooling', 'max', 'max|avg')
-cmd:option('-proto_file', 'models/VGG_ILSVRC_19_layers_deploy.prototxt')
-cmd:option('-model_file', 'models/VGG_ILSVRC_19_layers.caffemodel')
+cmd:option('-proto_file', '/shared/foss/artistic-videos/models/VGG_ILSVRC_19_layers_deploy.prototxt')
+cmd:option('-model_file', '/shared/foss/artistic-videos/models/VGG_ILSVRC_19_layers.caffemodel')
 cmd:option('-backend', 'nn', 'nn|cudnn|clnn')
 cmd:option('-cudnn_autotune', false)
 cmd:option('-seed', -1)
@@ -210,9 +210,10 @@ local function main(params)
       if run == 1 then
         -- For the first run, process the frames independently
         if frameIdx == params.start_number or params.init == 'random' then
-          img = randImg:clone():float()
-        elseif init == 'image' then
-          img = content_image:clone():float()
+          -- img = randImg:clone():float()
+          img = content_image_caffe:clone():float()
+        elseif params.init == 'image' then
+          img = content_image_caffe:clone():float()
         elseif params.init == 'prevWarped' then
           local prevImageWarpedWithPad = readPrevImageWarped(frameIdx, params, run - (1 - flag), true)
           img = preprocess(prevImageWarpedWithPad):float()

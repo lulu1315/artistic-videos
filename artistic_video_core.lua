@@ -75,7 +75,7 @@ function runOptimization(params, net, content_losses, style_losses, temporal_los
       if isMultiPass then
         filename = build_OutFilename(params, frameIdx, runIdx)
       else
-        filename = build_OutFilename(params, math.abs(frameIdx - params.start_number + 1), should_save_end and -1 or t)
+        filename = build_OutFilename(params, params.start_number+math.abs(frameIdx - params.start_number), should_save_end and -1 or t)
       end
       save_image(img, filename)
     end
@@ -497,6 +497,12 @@ function save_image(img, fileName)
   image.save(fileName, disp)
 end
 
+function save_image_nodeprocess(img, fileName)
+  local disp = img
+  disp = image.minmax{tensor=disp, min=0, max=1}
+  image.save(fileName, disp)
+end
+
 -- Checks whether a table contains a specific value
 function tabl_contains(tabl, val)
    for i=1,#tabl do
@@ -558,13 +564,16 @@ end
 function build_OutFilename(params, image_number, iterationOrRun)
   local ext = paths.extname(params.output_image)
   local basename = paths.basename(params.output_image, ext)
-  local fileNameBase = '%s%s-' .. params.number_format
+  local fileNameBase = '%s%s.' .. params.number_format
   if iterationOrRun == -1 then
     return string.format(fileNameBase .. '.%s',
       params.output_folder, basename, image_number, ext)
   else
-    return string.format(fileNameBase .. '_%d.%s',
-      params.output_folder, basename, image_number, iterationOrRun, ext)
+    fileNameBase = '%s%s_%d.' .. params.number_format
+    -- return string.format(fileNameBase .. '_%d.%s',
+    --  params.output_folder, basename, image_number, iterationOrRun, ext)
+    return string.format(fileNameBase .. '.%s',
+      params.output_folder, basename, iterationOrRun ,image_number, ext)
   end
 end
 
@@ -583,6 +592,13 @@ function getContentImage(frameIdx, params)
   local content_image = image.load(string.format(params.content_pattern, frameIdx), 3)
   content_image = preprocess(content_image):float()
   content_image = MaybePutOnGPU(content_image, params)
+  return content_image
+end
+
+function getContentImage_nopreprocess(frameIdx, params)
+  local fileName = string.format(params.content_pattern, frameIdx)
+  if not fileExists(fileName) then return nil end
+  local content_image = image.load(string.format(params.content_pattern, frameIdx), 3)
   return content_image
 end
 

@@ -33,6 +33,7 @@ cmd:option('-invert_flowWeights', 0, 'Invert flow weights given by flowWeight_pa
 
 -- Optimization options
 cmd:option('-content_weight', 5e0)
+cmd:option('-content_blend', 5e-1)
 cmd:option('-style_weight', 1e2)
 cmd:option('-temporal_weight', 1e3)
 cmd:option('-tv_weight', 1e-3)
@@ -56,8 +57,8 @@ cmd:option('-save_init', false, 'Whether the initialization image should be save
 -- Other options
 cmd:option('-style_scale', 1.0)
 cmd:option('-pooling', 'max', 'max|avg')
-cmd:option('-proto_file', 'models/VGG_ILSVRC_19_layers_deploy.prototxt')
-cmd:option('-model_file', 'models/VGG_ILSVRC_19_layers.caffemodel')
+cmd:option('-proto_file', '/shared/foss/artistic-videos/models/VGG_ILSVRC_19_layers_deploy.prototxt')
+cmd:option('-model_file', '/shared/foss/artistic-videos/models/VGG_ILSVRC_19_layers.caffemodel')
 cmd:option('-backend', 'nn', 'nn|cudnn|clnn')
 cmd:option('-cudnn_autotune', false)
 cmd:option('-seed', -1)
@@ -67,13 +68,16 @@ cmd:option('-args', '', 'Arguments in a file, one argument per line')
 
 -- Advanced options (changing them is usually not required)
 cmd:option('-combine_flowWeights_method', 'closestFirst',
-           'Which long-term weighting scheme to use: normalize or closestFirst. Deafult and recommended: closestFirst')
+           'Which long-term weighting scheme to use: normalize or closestFirst. Default and recommended: closestFirst')
 
 function nn.SpatialConvolutionMM:accGradParameters()
   -- nop.  not needed by our net
 end
 
 local function main(params)
+    
+  print("--------------------------> start main")
+    
   if params.gpu >= 0 then
     if params.backend ~= 'clnn' then
       require 'cutorch'
@@ -98,16 +102,25 @@ local function main(params)
 
   local loadcaffe_backend = params.backend
   if params.backend == 'clnn' then loadcaffe_backend = 'nn' end
+  
+  print("\n--------------------------> load cnn")
+  
   local cnn = loadcaffe.load(params.proto_file, params.model_file, loadcaffe_backend):float()
   cnn = MaybePutOnGPU(cnn, params)
 
+  print("--------------------------> getStyleImages")
+  
   local style_images_caffe = getStyleImages(params)
 
   -- Set up the network, inserting style losses. Content and temporal loss will be inserted in each iteration.
+  
+  print("--------------------------> buildNet")
+  
   local net, style_losses, losses_indices, losses_type = buildNet(cnn, params, style_images_caffe)
 
   -- We don't need the base CNN anymore, so clean it up to save memory.
   cnn = nil
+  
   for i=1,#net.modules do
     local module = net.modules[i]
     if torch.type(module) == 'nn.SpatialConvolutionMM' then
@@ -135,13 +148,17 @@ local function main(params)
 
   -- Iterate over all frames in the video sequence
   for frameIdx=params.start_number + params.continue_with - 1, params.start_number + num_images - 1 do
-
+    print("--------------------------> Working on frame :" .. frameIdx)
+    
     -- Set seed
     if params.seed >= 0 then
       torch.manualSeed(params.seed)
     end
 
+    print("--------------------------> getContentImage")
+    
     local content_image = getContentImage(frameIdx, params)
+    local content_image_nopreprocess = getContentImage_nopreprocess(frameIdx, params)
     if content_image == nil then
       print("No more frames.")
       do return end
@@ -178,7 +195,12 @@ local function main(params)
         local flowFileName = getFormatedFlowFileName(params.flow_pattern, math.abs(prevIndex), math.abs(frameIdx))
         print(string.format('Reading flow file "%s".', flowFileName))
         local flow = flowFile.load(flowFileName)
-        local fileName = build_OutFilename(params, math.abs(prevIndex - params.start_number + 1), -1)
+        local fileName = build_OutFilename(params, params.start_number+math.abs(prevIndex - params.start_number), -1)
+        --local fileName = build_OutFilename(params, math.abs(prevIndex - params.start_number + 1), -1)
+        --print("---------------->1 : prevIndex=",prevIndex)
+        --print("---------------->1 : params.start_number=",params.start_number)
+        --print("---------------->1 : filename=",fileName)
+        print("--------------------------> another warpImage")
         local imgWarped = warpImage(image.load(fileName, 3), flow)
         imgWarped = preprocess(imgWarped):float()
         imgWarped = MaybePutOnGPU(imgWarped, params)
@@ -228,21 +250,35 @@ local function main(params)
       end
     end
 
+    
     -- Initialization
     local img = nil
     if init == 'random' then
       img = torch.randn(content_image:size()):float():mul(0.001)
+      print("--------------------------> Initialization random")
     elseif init == 'image' then
       img = content_image:clone():float()
+      print("--------------------------> Initialization image")
     elseif init == 'prevWarped' and frameIdx > params.start_number then
+      print("--------------------------> Initialization prevWarped")
       local flowFileName = getFormatedFlowFileName(params.flow_pattern, math.abs(frameIdx - 1), math.abs(frameIdx))
       print(string.format('Reading flow file "%s".', flowFileName))
       local flow = flowFile.load(flowFileName)
-      local fileName = build_OutFilename(params, math.abs(frameIdx - params.start_number), -1)
+      local fileName = build_OutFilename(params, params.start_number+math.abs(frameIdx - params.start_number-1), -1)
+      --local fileName = build_OutFilename(params, math.abs(frameIdx - params.start_number), -1)
       img = warpImage(image.load(fileName, 3), flow)
+      -- mix content and warped
+      img:mul(1-params.content_blend)
+      content_image_nopreprocess:mul(params.content_blend)
+      img:add(content_image_nopreprocess)
+      print("--------------------------> warping and blending : " .. params.content_blend)
+      save_image_nodeprocess(img,
+        string.format('%stmp.' .. params.number_format .. '.png',
+        params.output_folder, frameIdx))
       img = preprocess(img):float()
     elseif init == 'prev' and frameIdx > params.start_number then
-      local fileName = build_OutFilename(params, math.abs(frameIdx - params.start_number), -1)
+      local fileName = build_OutFilename(params, params.start_number+math.abs(frameIdx - params.start_number-1), -1)
+      --local fileName = build_OutFilename(params, math.abs(frameIdx - params.start_number), -1)
       img = image.load(fileName, 3)
       img = preprocess(img):float()
     elseif init == 'first' then
@@ -255,13 +291,17 @@ local function main(params)
     if params.save_init then
       save_image(img,
         string.format('%sinit-' .. params.number_format .. '.png',
-          params.output_folder, math.abs(frameIdx - params.start_number + 1)))
+          params.output_folder, params.start_number+math.abs(frameIdx - params.start_number)))
+        --string.format('%sinit-' .. params.number_format .. '.png',
+        --  params.output_folder, math.abs(frameIdx - params.start_number + 1)))
     end
 
     -- Run the optimization to stylize the image, save the result to disk
+    print("--------------------------> runOptimization")
     runOptimization(params, net, content_losses, style_losses, temporal_losses, img, frameIdx, -1, num_iterations)
 
     if frameIdx == params.start_number then
+      print("--------------------------> firstImg")
       firstImg = img:clone():float()
     end
     
