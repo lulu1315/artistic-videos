@@ -187,7 +187,7 @@ local function main(params)
     -- colortransfer : wcolor dans workdir , sinon content
     if params.docolortransfer == 3 then
         print("--------------------------> color transfert [neuraltools:pca]")
-        local colorcmd=string.format('python /shared/foss/Neural-Tools/linear-color-transfer.py --mode pca --target_image  %s --source_image %s --output_image %s',wcolor,params.style_image,wcolor)
+        local colorcmd=string.format('python3 /shared/foss/Neural-Tools/linear-color-transfer.py --mode pca --target_image  %s --source_image %s --output_image %s',wcolor,params.style_image,wcolor)
         print (colorcmd)
         os.execute (colorcmd)
     end

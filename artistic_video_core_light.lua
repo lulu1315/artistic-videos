@@ -28,7 +28,7 @@ function save_image(img, fileName)
 end
 
 function runOptimization(params, net, content_losses, style_losses, temporal_losses,
-    img, frameIdx, max_iter)
+    img, frameIdx, max_iter,workingdir,style_image)
 
   -- Run it through the network once to get the proper size for the gradient
   -- All the gradients will come from the extra loss modules, so we just pass
@@ -48,6 +48,8 @@ function runOptimization(params, net, content_losses, style_losses, temporal_los
   elseif params.optimizer == 'adam' then
     optim_state = {
       learningRate = params.learning_rate,
+      beta1 = params.beta1,
+      epsilon = params.epsilon,
     }
   else
     error(string.format('Unrecognized optimizer "%s"', params.optimizer))
@@ -139,8 +141,33 @@ function runOptimization(params, net, content_losses, style_losses, temporal_los
     local x, losses = lbfgs_mod.optimize(feval, img, optim_state)
   elseif params.optimizer == 'adam' then
     print('Running optimization with ADAM')
+    -- imgmean = torch.mean(img)
+    -- print('initial mean value : ' ,imgmean)
+    
     for t = 1, max_iter do
       local x, losses = optim.adam(feval, img, optim_state)
+      if t % params.save_iter == 0 then
+        local interimage    = workingdir .. "/interimage." .. t .. ".png"
+        local transferimage = workingdir .. "/transferimage." .. t .. ".png"
+        save_image(img, interimage)
+        local colorcmd=string.format('python3 /shared/foss-18/Neural-Tools/linear-color-transfer.py --mode pca --target_image  %s --source_image %s --output_image %s 2> tmp.log',interimage,params.style_image,transferimage)
+        -- print (colorcmd)
+        os.execute (colorcmd)
+        newimg = image.load(transferimage, 3)
+        img = PutOnGPU(preprocess(newimg):float(), params)
+        -- prevmean = imgmean
+        -- imgmean = torch.mean(img)
+        -- deltamean=torch.abs(imgmean-prevmean)
+        -- print('prev mean  : ' ,prevmean)
+        -- print('cur mean   : ' ,imgmean)
+        -- print('delta mean : ' ,deltamean)
+        -- if deltamean < 0.0001 then break end
+        if t == params.save_iter then
+            freeMemory,totalMemory=cutorch.getMemoryUsage(cutorch.getDevice())
+            print('memory(free/total) : ' ,freeMemory*9.3132257461548e-10,totalMemory*9.3132257461548e-10)
+        end
+        print('iteration : ',t)
+      end
     end
   end
   
