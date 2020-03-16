@@ -28,7 +28,7 @@ function save_image(img, fileName)
 end
 
 function runOptimization(params, net, content_losses, style_losses, temporal_losses,
-    img, frameIdx, max_iter,workingdir,style_image)
+    img, frameIdx, max_iter, workingdir, style_image, currentdef)
 
   -- Run it through the network once to get the proper size for the gradient
   -- All the gradients will come from the extra loss modules, so we just pass
@@ -94,9 +94,9 @@ function runOptimization(params, net, content_losses, style_losses, temporal_los
     if should_save_intermed or should_save_end then
       local filename = nil
       if isMultiPass then
-        filename = build_OutFilename(params, frameIdx, runIdx)
+        filename = build_OutFilename(params, frameIdx, currentdef, runIdx)
       else
-        filename = build_OutFilename(params, params.start_number+math.abs(frameIdx - params.start_number), should_save_end and -1 or t)
+        filename = build_OutFilename(params, params.start_number+math.abs(frameIdx - params.start_number), currentdef, should_save_end and -1 or t)
       end
       save_image(img, filename)
     end
@@ -146,27 +146,27 @@ function runOptimization(params, net, content_losses, style_losses, temporal_los
     
     for t = 1, max_iter do
       local x, losses = optim.adam(feval, img, optim_state)
-      if t % params.save_iter == 0 then
-        local interimage    = workingdir .. "/interimage." .. t .. ".png"
-        local transferimage = workingdir .. "/transferimage." .. t .. ".png"
-        save_image(img, interimage)
-        local colorcmd=string.format('python3 /shared/foss-18/Neural-Tools/linear-color-transfer.py --mode pca --target_image  %s --source_image %s --output_image %s 2> tmp.log',interimage,params.style_image,transferimage)
-        -- print (colorcmd)
-        os.execute (colorcmd)
-        newimg = image.load(transferimage, 3)
-        img = PutOnGPU(preprocess(newimg):float(), params)
-        -- prevmean = imgmean
-        -- imgmean = torch.mean(img)
-        -- deltamean=torch.abs(imgmean-prevmean)
-        -- print('prev mean  : ' ,prevmean)
-        -- print('cur mean   : ' ,imgmean)
-        -- print('delta mean : ' ,deltamean)
-        -- if deltamean < 0.0001 then break end
-        if t == params.save_iter then
+      if t == params.save_iter then
             freeMemory,totalMemory=cutorch.getMemoryUsage(cutorch.getDevice())
             print('memory(free/total) : ' ,freeMemory*9.3132257461548e-10,totalMemory*9.3132257461548e-10)
-        end
-        print('iteration : ',t)
+      end
+      if t % params.save_iter == 0 then
+          local transferimage = workingdir .. "/transferimage." .. t .. ".png"
+          save_image(img, transferimage)
+          if params.docolortransfer == 1 then
+              if currentdef == 0 then
+                local colorcmd=string.format('/shared/foss-18/gmic-2.8.3_pre/build/gmic -i %s -i %s +transfer_pca[0] [1],ycbcr_y transfer_pca[-1] [1],ycbcr_cbcr -o[2] %s 2> /var/tmp/tmp.log',transferimage,params.style_image_lowdef,transferimage)
+              else
+                local colorcmd=string.format('/shared/foss-18/gmic-2.8.3_pre/build/gmic -i %s -i %s +transfer_pca[0] [1],ycbcr_y transfer_pca[-1] [1],ycbcr_cbcr -o[2] %s 2> /var/tmp/tmp.log',transferimage,params.style_image,transferimage)
+              end
+            -- print (colorcmd)
+            os.execute (colorcmd)
+            newimg = image.load(transferimage, 3)
+            img = PutOnGPU(preprocess(newimg):float(), params)
+            print('iteration : ',t,' (recolorizing ..)')
+          else
+            print('iteration : ',t)
+          end
       end
     end
   end
@@ -178,6 +178,7 @@ function runOptimization(params, net, content_losses, style_losses, temporal_los
   print_end(num_calls)
   maybe_save(num_calls, true)
 end
+
 function fileExists(name)
    local f=io.open(name,"r")
    if f~=nil then io.close(f) return true else return false end
@@ -200,6 +201,20 @@ function warpImage(img, flow)
   return result
 end
 
+function brutewarpImage(img, flow)
+  result = image.warp(img, flow, 'bilinear', true, 'pad', -1)
+  for x=1, result:size(2) do
+    for y=1, result:size(3) do
+      if result[1][x][y] == -1 and result[2][x][y] == -1 and result[3][x][y] == -1 then
+        result[1][x][y] = img[1][x][y]
+        result[2][x][y] = img[2][x][y]
+        result[3][x][y] = img[3][x][y]
+      end
+    end
+  end
+  return result
+end
+
 function getFormatedFlowFileName(pattern, fromIndex, toIndex)
   local flowFileName = pattern
   flowFileName = string.gsub(flowFileName, '{(.-)}',
@@ -209,10 +224,15 @@ function getFormatedFlowFileName(pattern, fromIndex, toIndex)
   return flowFileName
 end
 
-function build_OutFilename(params, image_number)
+function build_OutFilename(params, image_number, currentdef, iterationOrRun)
+  
   local ext = paths.extname(params.output_image)
   local basename = paths.basename(params.output_image, ext)
-  local fileNameBase = '%s%s.' .. params.number_format
+  if currentdef == 0 then
+    fileNameBase = '%s%s_lowdef.' .. params.number_format
+  else
+    fileNameBase = '%s%s.' .. params.number_format
+  end
   return string.format(fileNameBase .. '.%s',
       params.output_folder, basename, image_number, ext)
 end

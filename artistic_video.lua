@@ -3,7 +3,7 @@ require 'nn'
 require 'image'
 require 'loadcaffe'
 require 'paths'
-require 'artistic_video_core_light'
+require 'artistic_video_core'
 
 local colors = require 'ansicolors'
 
@@ -38,6 +38,7 @@ cmd:option('-contrast', 0)
 cmd:option('-gamma', 0)
 cmd:option('-saturation', 0)
 cmd:option('-noise', 0)
+cmd:option('-histogramtransfer', 0)
 
 --preProcess options
 cmd:option('-docolortransfer', 0)
@@ -110,6 +111,8 @@ cmd:option('-combine_flowWeights_method', 'closestFirst',
 
 local function main(params)
     
+  gmicbin="/shared/foss-18/gmic-2.8.3_pre/build/gmic"
+  
   print("--------------------------> start main")
   
   require 'cutorch'
@@ -179,9 +182,7 @@ local function main(params)
   local numIters_first, numIters_subseq = num_iterations_split[1], num_iterations_split[2] or num_iterations_split[1]
   local init_split = params.init:split(",")
   local init_first, init_subseq = init_split[1], init_split[2] or init_split[1]
-  -- local firstImg = nil
   local num_images = params.num_images
-  -- local flow_relative_indices_split = params.flow_relative_indices:split(",")
 
   -- create working dir
   workingdir=string.format('%s/work_%s',params.output_folder , params.pid)
@@ -197,7 +198,8 @@ local function main(params)
   -- for frameIdx=params.start_number + params.continue_with - 1, params.start_number + num_images - 1 do
   -- for frameIdx=params.start_number + params.continue_with - 1, params.continue_with + num_images - 1 do
   for frameIdx=loopstart,loopend do
-    print(colors("%{yellow}\n--------------------------> Working on frame :" .. frameIdx .. "(" .. loopstart .. "->" .. loopend .. ")"))
+    framesleft=loopend - frameIdx
+    print(colors("%{yellow}\n--------------------------> Working on frame :" .. frameIdx .. " (" .. loopstart .. "->" .. loopend .. ") " .. framesleft .. " frames to go .."))
     print("-- working dir : " .. workingdir)
     -- Set seed
     if params.seed >= 0 then
@@ -211,7 +213,7 @@ local function main(params)
     
     if params.output_size ~= 0 then
         print("--------------------------> resize content [sizex:" .. params.output_size .. "]")
-        resizecmd=string.format('gmic -i %s -resize2dx %s,5 -to_colormode 3 -c 0,255 -o %s 2> /var/tmp/artistic.log',wcontent,params.output_size,wcolor);
+        resizecmd=string.format('%s -i %s -resize2dx %s,5 -to_colormode 3 -c 0,255 -o %s 2> /var/tmp/artistic.log',gmicbin,wcontent,params.output_size,wcolor);
         -- print (resizecmd)
         os.execute (resizecmd)
     else
@@ -247,9 +249,9 @@ local function main(params)
             gmic4="-resize2dx %s,5"
             gmic4=string.format("-resize2dx %s,5" , params.output_size)
         end
-        local gmiccmd=string.format("gmic -i %s -to_colormode 3 %s %s %s %s -c 0,255 -o %s 2> /var/tmp/artistic.log" , edges , gmic1 , gmic2 , gmic3 , gmic4 , wedges)
+        local gmiccmd=string.format("%s -i %s -to_colormode 3 %s %s %s %s -c 0,255 -o %s 2> /var/tmp/artistic.log" ,gmicbin,edges,gmic1,gmic2,gmic3,gmic4,wedges)
         os.execute(gmiccmd)
-        local addedgecmd=string.format("gmic -i %s -i %s -blend %s,%s -o %s 2> /var/tmp/artistic.log" , wcolor , wedges , params.edgesmode , params.edgesopacity , wcolor)
+        local addedgecmd=string.format("%s -i %s -i %s -blend %s,%s -o %s 2> /var/tmp/artistic.log" ,gmicbin,wcolor,wedges,params.edgesmode,params.edgesopacity,wcolor)
         print("--------------------------> add edges [mode:" .. params.edgesmode .."] [opacity:" .. params.edgesopacity .."]" )
         os.execute(addedgecmd)
     end
@@ -257,7 +259,7 @@ local function main(params)
     -- lce
     if params.lce == 1 then
         print("--------------------------> local contrast enhancement [" .. params.lce .. "]")
-        lcecmd=string.format('gmic -i %s -fx_LCE 80,0.5,1,1,0,0 -o %s 2> /var/tmp/artistic.log',wcolor,wcolor);
+        lcecmd=string.format('%s -i %s -fx_LCE 80,0.5,1,1,0,0 -o %s 2> /var/tmp/artistic.log',gmicbin,wcolor,wcolor);
         -- print (lcecmd)
         os.execute (lcecmd)
     end
@@ -265,7 +267,7 @@ local function main(params)
     -- equalize 
     if params.equalize == 1 then
         print("--------------------------> equalize [levels:256 min:" .. params.equalizemin .. " max:" .. params.equalizemax .."]")
-        equcmd=string.format('gmic -i %s -equalize 256,%s,%s -o %s 2> /var/tmp/artistic.log',wcolor,params.equalizemin,params.equalizemax,wcolor);
+        equcmd=string.format('%s -i %s -equalize 256,%s,%s -o %s 2> /var/tmp/artistic.log',gmicbin,wcolor,params.equalizemin,params.equalizemax,wcolor);
          -- print (equcmd)
         os.execute (equcmd)
     end
@@ -273,15 +275,16 @@ local function main(params)
     -- adjustcolor 
     if params.brightness ~= 0 or params.contrast ~= 0 or params.gamma ~= 0 or params.saturation ~= 0 then
         print("--------------------------> adjust color [B/C/G/S:" .. params.brightness .. "," .. params.contrast .. "," .. params.gamma .. "," .. params.saturation .."]")
-        adjustcmd=string.format('gmic -i %s -fx_adjust_colors %s,%s,%s,0,%s -o %s 2> /var/tmp/artistic.log',wcolor,params.brightness,params.contrast,params.gamma,params.saturation,wcolor);
+        adjustcmd=string.format('%s -i %s -fx_adjust_colors %s,%s,%s,0,%s -o %s 2> /var/tmp/artistic.log',gmicbin,wcolor,params.brightness,params.contrast,params.gamma,params.saturation,wcolor);
          -- print (equcmd)
         os.execute (adjustcmd)
     end
     
     -- content blur 
     if params.content_blur ~= 0 then
-        print("--------------------------> blur content [blur:" .. params.content_blur .. "]")
-        blurcmd=string.format('gmic -i %s -fx_sharp_abstract %s,10,0.5,0,0 -o %s 2> /var/tmp/artistic.log',wcolor,params.content_blur,wcolor);
+        print("--------------------------> anisotropic filter content [iter:" .. params.content_blur .. "]")
+        -- blurcmd=string.format('%s -i %s -fx_sharp_abstract %s,10,0.5,0,0 -o %s 2> /var/tmp/artistic.log',gmicbin,wcolor,params.content_blur,wcolor);
+        blurcmd=string.format('%s -i %s fx_smooth_anisotropic 60,0.7,0.3,0.6,1.1,0.8,30,2,0,1,%s,0,0,50,50 -o %s 2> /var/tmp/artistic.log',gmicbin,wcolor,params.content_blur,wcolor);
          -- print (blurcmd)
         os.execute (blurcmd)
     end
@@ -289,7 +292,7 @@ local function main(params)
     -- noise
     if params.noise ~= 0 then
         print("--------------------------> noise [noise:" .. params.noise .. "]")
-        noisecmd=string.format('gmic -i %s -fx_simulate_grain 0,1,%s,100,0,0,0,0,0,0,0,0 -o %s 2> /var/tmp/artistic.log',wcolor,params.noise,wcolor);
+        noisecmd=string.format('%s -i %s -fx_simulate_grain 0,1,%s,100,0,0,0,0,0,0,0,0 -o %s 2> /var/tmp/artistic.log',gmicbin,wcolor,params.noise,wcolor);
          -- print (blurcmd)
         os.execute (noisecmd)
     end
@@ -304,30 +307,39 @@ local function main(params)
         print("after expand : " .. img_expand_sizex .. " x " .. img_expand_sizey)
         -- expand wcolor
         print("--------------------------> shave & expand [shavex/y:" .. img_shave_sizex .. "/" .. img_shave_sizey .. "] [expandx/y:" .. img_expand_sizex .. "/" .. img_expand_sizey .. "]")
-        local expandcmd=string.format("gmic -i %s -rolling_guidance 8,10,0.5 --resize %s,%s,1,3,0,0,.5,.5,.5,.5 -fill[1] 1,1,1 -resize %s,%s,1,3,0,0,.5,.5,.5,.5 -oneminus[1] -inpaint[0] [1],0 -noise[0] 5,4 -b[1] %s -i %s -mul[0] [1] -resize[2] %s,%s,1,3,0,0,.5,.5,.5,.5 -oneminus[1] -mul[2] [1] -add[0] [2] -remove[-1] -remove[-1] -o %s 2> /var/tmp/artistic.log" , wcolor,img_shave_sizex,img_shave_sizey,img_expand_sizex,img_expand_sizey,params.shavex/2,wcolor,img_expand_sizex,img_expand_sizey,wcolor)
+        local expandcmd=string.format("%s -i %s -rolling_guidance 8,10,0.5 --resize %s,%s,1,3,0,0,.5,.5,.5,.5 -fill[1] 1,1,1 -resize %s,%s,1,3,0,0,.5,.5,.5,.5 -oneminus[1] -inpaint[0] [1],0 -noise[0] 5,4 -b[1] %s -i %s -mul[0] [1] -resize[2] %s,%s,1,3,0,0,.5,.5,.5,.5 -oneminus[1] -mul[2] [1] -add[0] [2] -remove[-1] -remove[-1] -o %s 2> /var/tmp/artistic.log",gmicbin,wcolor,img_shave_sizex,img_shave_sizey,img_expand_sizex,img_expand_sizey,params.shavex/2,wcolor,img_expand_sizex,img_expand_sizey,wcolor)
         print (expandcmd)
         os.execute(expandcmd)
     end
     
     -- colortransfer : wcolor dans workdir
-    if params.docolortransfer == 3 then
-        print("--------------------------> color transfert [neuraltools:pca]")
-        local colorcmd=string.format('python3 /shared/foss-18/Neural-Tools/linear-color-transfer.py --mode pca --target_image  %s --source_image %s --output_image %s 2> /var/tmp/artistic.log',wcolor,params.style_image,wcolor)
+    if params.docolortransfer == 1 then
+        print("--------------------------> color transfert [gmic]")
+        -- local colorcmd=string.format('python3 /shared/foss-18/Neural-Tools/linear-color-transfer.py --mode pca --target_image  %s --source_image %s --output_image %s 2> /var/tmp/artistic.log',wcolor,params.style_image,wcolor)
+        local colorcmd=string.format('%s -i %s -i %s +transfer_pca[0] [1],ycbcr_y transfer_pca[-1] [1],ycbcr_cbcr -o[2] %s 2> /var/tmp/artistic.log',gmicbin,wcolor,params.style_image,wcolor)
         -- print (colorcmd)
         os.execute (colorcmd)
         -- print (params.doindex)
         if params.doindex == 1 then
             print("--------------------------> color transfert [index:" .. params.indexcolor .. " dither:" .. params.dithering .. "]")
-            local indexcmd=string.format('gmic %s -colormap %s,%s,1 %s -index[1] [0],%s,1 -remove[0] -fx_sharp_abstract %s,10,0.5,0,0 -o %s 2> /var/tmp/artistic.log',params.style_image,params.indexcolor,params.indexmethod,wcolor,params.dithering,params.indexroll,wcolor)
+            local indexcmd=string.format('%s %s -colormap %s,%s,1 %s -index[1] [0],%s,1 -remove[0] -fx_sharp_abstract %s,10,0.5,0,0 -o %s 2> /var/tmp/artistic.log',gmicbin,params.style_image,params.indexcolor,params.indexmethod,wcolor,params.dithering,params.indexroll,wcolor)
             print (indexcmd)
             os.execute (indexcmd)
         end
     end
     
+    -- histogram transfer
+    if params.histogramtransfer == 1 then
+        print("--------------------------> histogram transfer")
+        histocmd=string.format('%s -i %s -i %s -transfer_histogram[0] [1],512 -o[0] %s 2> /var/tmp/artistic.log',gmicbin,wcolor,params.style_image,wcolor);
+        -- print (histocmd)
+        os.execute (histocmd)
+    end
+    
     -- anisotropic smoothing
     if params.anisotropic >= 1 then
         print("--------------------------> anisotropic smoothing [iters:" .. params.anisotropic .. "]")
-        anisocmd=string.format('gmic -i %s fx_smooth_anisotropic 60,0.7,0.3,0.6,1.1,0.8,30,2,0,1,%s,0,0,50,50 -o %s 2> /var/tmp/artistic.log',wcolor,params.anisotropic,wcolor);
+        anisocmd=string.format('%s -i %s fx_smooth_anisotropic 60,0.7,0.3,0.6,1.1,0.8,30,2,0,1,%s,0,0,50,50 -o %s 2> /var/tmp/artistic.log',gmicbin,wcolor,params.anisotropic,wcolor);
         -- print (anisocmd)
         os.execute (anisocmd)
     end
@@ -368,14 +380,16 @@ local function main(params)
         -- resize opticalflow
         if params.output_size ~= 0 then
             print("--------------------------> resize flow file")
-            local resizeflocmd=string.format("flo2exr %s %s > /var/tmp/artistic.log;gmic -i %s -resize2dx %s,5 -mul %s -o %s 2> /var/tmp/artistic.log;exr2flo %s %s > /var/tmp/artistic.log" ,woptical, wopticalexr,wopticalexr,params.output_size,motionratio,wopticalexr,wopticalexr,woptical)
+            -- local resizeflocmd=string.format("flo2exr %s %s > /var/tmp/artistic.log;gmic -i %s -resize2dx %s,5 -mul %s -o %s 2> /var/tmp/artistic.log;exr2flo %s %s > /var/tmp/artistic.log" ,woptical, wopticalexr,wopticalexr,params.output_size,motionratio,wopticalexr,wopticalexr,woptical)
+            local resizeflocmd=string.format("%s -i %s -resize2dx %s,5 -mul %s -o %s 2> /var/tmp/artistic.log",gmicbin,woptical,params.output_size,motionratio,woptical)
             -- print (resizeflocmd)
             os.execute(resizeflocmd)
         end
         -- expand opticalflow
         if params.shavex ~= 0 or params.shavey ~= 0 or params.expandx ~= 0 or params.expandy ~= 0 then
             print("--------------------------> shave & expand [shavex/y:" .. img_shave_sizex .. "/" .. img_shave_sizey .. "] [expandx/y:" .. img_expand_sizex .. "/" .. img_expand_sizey .. "]")
-            local expandcmd=string.format("flo2exr %s %s;gmic -i %s -resize %s,%s,1,3,0,0,.5,.5,.5,.5 -resize %s,%s,1,3,0,1,.5,.5,.5,.5 -o %s 2> /var/tmp/artistic.log;exr2flo %s %s" ,woptical, wopticalexr,wopticalexr,img_shave_sizex,img_shave_sizey,img_expand_sizex,img_expand_sizey,wopticalexr,wopticalexr,woptical)
+            -- local expandcmd=string.format("flo2exr %s %s;gmic -i %s -resize %s,%s,1,3,0,0,.5,.5,.5,.5 -resize %s,%s,1,3,0,1,.5,.5,.5,.5 -o %s 2> /var/tmp/artistic.log;exr2flo %s %s" ,woptical, wopticalexr,wopticalexr,img_shave_sizex,img_shave_sizey,img_expand_sizex,img_expand_sizey,wopticalexr,wopticalexr,woptical)
+            local expandcmd=string.format("%s -i %s -resize %s,%s,1,3,0,0,.5,.5,.5,.5 -resize %s,%s,1,3,0,1,.5,.5,.5,.5 -o %s 2> /var/tmp/artistic.log",gmicbin,woptical,img_shave_sizex,img_shave_sizey,img_expand_sizex,img_expand_sizey,woptical)
             -- print (expandcmd)
             os.execute(expandcmd)
         end
@@ -388,12 +402,12 @@ local function main(params)
             -- resize mask
             if params.output_size ~= 0 then
                 print("--------------------------> resize mask")
-                local resizemaskcmd=string.format("gmic -i %s -resize2dx %s,5 -o %s 2> /var/tmp/artistic.log" ,wmask,params.output_size,wmask)
+                local resizemaskcmd=string.format("%s -i %s -resize2dx %s,5 -o %s 2> /var/tmp/artistic.log" ,gmicbin,wmask,params.output_size,wmask)
                 print (resizemaskcmd)
                 os.execute(resizemaskcmd)
             end
             -- multiply opticalflow by mask
-            multcmd=string.format("/shared/foss-18/gmic-2.8.0_pre/src/gmic -i %s %s -split[1] c -remove[2,3] -div[1] 255 -mul[0] [1] -remove[1] -o %s 2> /var/tmp/artistic.log" ,woptical,wmask,woptical)
+            multcmd=string.format("%s -i %s %s -split[1] c -remove[2,3] -div[1] 255 -mul[0] [1] -remove[1] -o %s 2> /var/tmp/artistic.log" ,gmicbin,woptical,wmask,woptical)
             print("--------------------------> mask opticalflow")
             os.execute (multcmd)
         end
@@ -415,14 +429,16 @@ local function main(params)
             -- expand tangent
             if params.shavex ~= 0 or params.shavey ~= 0 or params.expandx ~= 0 or params.expandy ~= 0 then
                 print("--------------------------> shave & expand [shavex/y:" .. img_shave_sizex .. "/" .. img_shave_sizey .. "] [expandx/y:" .. img_expand_sizex .. "/" .. img_expand_sizey .. "]")
-                local expandcmd=string.format("flo2exr %s %s;gmic -i %s -resize %s,%s,1,3,0,0,.5,.5,.5,.5 -resize %s,%s,1,3,0,1,.5,.5,.5,.5 -o %s 2> /var/tmp/artistic.log;exr2flo %s %s" ,wtangent, wtangentexr,wtangentexr,img_shave_sizex,img_shave_sizey,img_expand_sizex,img_expand_sizey,wtangentexr,wtangentexr,wtangent)
+                -- local expandcmd=string.format("flo2exr %s %s;gmic -i %s -resize %s,%s,1,3,0,0,.5,.5,.5,.5 -resize %s,%s,1,3,0,1,.5,.5,.5,.5 -o %s 2> /var/tmp/artistic.log;exr2flo %s %s" ,wtangent, wtangentexr,wtangentexr,img_shave_sizex,img_shave_sizey,img_expand_sizex,img_expand_sizey,wtangentexr,wtangentexr,wtangent)
+                local expandcmd=string.format("%s -i %s -resize %s,%s,1,3,0,0,.5,.5,.5,.5 -resize %s,%s,1,3,0,1,.5,.5,.5,.5 -o %s 2> /var/tmp/artistic.log",gmicbin,wtangent,img_shave_sizex,img_shave_sizey,img_expand_sizex,img_expand_sizey,wtangent)
                 -- print (expandcmd)
                 os.execute(expandcmd)
             end
             -- 
             if params.output_size ~= 0 then
                 print("--------------------------> resize tangent file")
-                local resizetangentcmd=string.format("flo2exr %s %s > /var/tmp/artistic.log;gmic -i %s -resize2dx %s,5 -mul %s -o %s 2> /var/tmp/artistic.log;exr2flo %s %s > /var/tmp/artistic.log" ,wtangent, wtangentexr,wtangentexr,params.output_size,motionratio,wtangentexr,wtangentexr,wtangent)
+                -- local resizetangentcmd=string.format("flo2exr %s %s > /var/tmp/artistic.log;gmic -i %s -resize2dx %s,5 -mul %s -o %s 2> /var/tmp/artistic.log;exr2flo %s %s > /var/tmp/artistic.log" ,wtangent, wtangentexr,wtangentexr,params.output_size,motionratio,wtangentexr,wtangentexr,wtangent)
+                local resizetangentcmd=string.format("%s -i %s -resize2dx %s,5 -mul %s -o %s 2> /var/tmp/artistic.log",gmicbin,wtangent,params.output_size,motionratio,wtangent)
                 -- print (resizetangentcmd)
                 os.execute(resizetangentcmd)
             end
@@ -442,14 +458,16 @@ local function main(params)
             -- expand gradient
             if params.shavex ~= 0 or params.shavey ~= 0 or params.expandx ~= 0 or params.expandy ~= 0 then
                 print("--------------------------> shave & expand [shavex/y:" .. img_shave_sizex .. "/" .. img_shave_sizey .. "] [expandx/y:" .. img_expand_sizex .. "/" .. img_expand_sizey .. "]")
-                local expandcmd=string.format("flo2exr %s %s;gmic -i %s -resize %s,%s,1,3,0,0,.5,.5,.5,.5 -resize %s,%s,1,3,0,1,.5,.5,.5,.5 -o %s 2> /var/tmp/artistic.log;exr2flo %s %s" ,wgradient, wgradientexr,wgradientexr,img_shave_sizex,img_shave_sizey,img_expand_sizex,img_expand_sizey,wgradientexr,wgradientexr,wgradient)
+                -- local expandcmd=string.format("flo2exr %s %s;gmic -i %s -resize %s,%s,1,3,0,0,.5,.5,.5,.5 -resize %s,%s,1,3,0,1,.5,.5,.5,.5 -o %s 2> /var/tmp/artistic.log;exr2flo %s %s" ,wgradient, wgradientexr,wgradientexr,img_shave_sizex,img_shave_sizey,img_expand_sizex,img_expand_sizey,wgradientexr,wgradientexr,wgradient)
+                local expandcmd=string.format("%s -i %s -resize %s,%s,1,3,0,0,.5,.5,.5,.5 -resize %s,%s,1,3,0,1,.5,.5,.5,.5 -o %s 2> /var/tmp/artistic.log",gmicbin,wgradient,img_shave_sizex,img_shave_sizey,img_expand_sizex,img_expand_sizey,wgradient)
                 -- print (expandcmd)
                 os.execute(expandcmd)
             end
             -- 
             if params.output_size ~= 0 then
                 print("--------------------------> resize gradient file")
-                local resizegradientcmd=string.format("flo2exr %s %s > /var/tmp/artistic.log;gmic -i %s -resize2dx %s,5 -mul %s -o %s 2> /var/tmp/artistic.log;exr2flo %s %s > /var/tmp/artistic.log" ,wgradient, wgradientexr,wgradientexr,params.output_size,motionratio,wgradientexr,wgradientexr,wgradient)
+                -- local resizegradientcmd=string.format("flo2exr %s %s > /var/tmp/artistic.log;gmic -i %s -resize2dx %s,5 -mul %s -o %s 2> /var/tmp/artistic.log;exr2flo %s %s > /var/tmp/artistic.log" ,wgradient, wgradientexr,wgradientexr,params.output_size,motionratio,wgradientexr,wgradientexr,wgradient)
+                local resizegradientcmd=string.format("%s -i %s -resize2dx %s,5 -mul %s -o %s 2> /var/tmp/artistic.log",gmicbin,wgradient,params.output_size,motionratio,wgradient)
                 -- print (resizetangentcmd)
                 os.execute(resizegradientcmd)
             end
@@ -470,14 +488,16 @@ local function main(params)
             -- expand custom
             if params.shavex ~= 0 or params.shavey ~= 0 or params.expandx ~= 0 or params.expandy ~= 0 then
                 print("--------------------------> shave & expand [shavex/y:" .. img_shave_sizex .. "/" .. img_shave_sizey .. "] [expandx/y:" .. img_expand_sizex .. "/" .. img_expand_sizey .. "]")
-                local expandcmd=string.format("flo2exr %s %s;gmic -i %s -resize %s,%s,1,3,0,0,.5,.5,.5,.5 -resize %s,%s,1,3,0,1,.5,.5,.5,.5 -o %s 2> /var/tmp/artistic.log;exr2flo %s %s" ,wcustom, wcustomexr,wcustomexr,img_shave_sizex,img_shave_sizey,img_expand_sizex,img_expand_sizey,wcustomexr,wcustomexr,wcustom)
+                -- local expandcmd=string.format("flo2exr %s %s;gmic -i %s -resize %s,%s,1,3,0,0,.5,.5,.5,.5 -resize %s,%s,1,3,0,1,.5,.5,.5,.5 -o %s 2> /var/tmp/artistic.log;exr2flo %s %s" ,wcustom, wcustomexr,wcustomexr,img_shave_sizex,img_shave_sizey,img_expand_sizex,img_expand_sizey,wcustomexr,wcustomexr,wcustom)
+                local expandcmd=string.format("%s -i %s -resize %s,%s,1,3,0,0,.5,.5,.5,.5 -resize %s,%s,1,3,0,1,.5,.5,.5,.5 -o %s 2> /var/tmp/artistic.log",gmicbin,wcustom,img_shave_sizex,img_shave_sizey,img_expand_sizex,img_expand_sizey,wcustom)
                 -- print (expandcmd)
                 os.execute(expandcmd)
             end
             -- 
             if params.output_size ~= 0 then
                 print("--------------------------> resize custom file")
-                local resizecustomcmd=string.format("flo2exr %s %s > /var/tmp/artistic.log;gmic -i %s -resize2dx %s,5 -mul %s -o %s 2> /var/tmp/artistic.log;exr2flo %s %s > /var/tmp/artistic.log" ,wcustom, wcustomexr,wcustomexr,params.output_size,motionratio,wcustomexr,wcustomexr,wcustom)
+                -- local resizecustomcmd=string.format("flo2exr %s %s > /var/tmp/artistic.log;gmic -i %s -resize2dx %s,5 -mul %s -o %s 2> /var/tmp/artistic.log;exr2flo %s %s > /var/tmp/artistic.log" ,wcustom, wcustomexr,wcustomexr,params.output_size,motionratio,wcustomexr,wcustomexr,wcustom)
+                local resizecustomcmd=string.format("%s -i %s -resize2dx %s,5 -mul %s -o %s 2> /var/tmp/artistic.log",gmicbin,wcustom,params.output_size,motionratio,wcustom)
                 -- print (resizecustomcmd)
                 os.execute(resizecustomcmd)
             end
@@ -521,7 +541,7 @@ local function main(params)
         -- resize reliable
         if params.output_size ~= 0 then
             print("--------------------------> resize reliable file")
-            local resizereliablecmd=string.format("gmic -i %s -resize2dx %s,5 -c 0,255 -o %s 2> /var/tmp/artistic.log" ,wreliable,params.output_size,wreliable)
+            local resizereliablecmd=string.format("%s -i %s -resize2dx %s,5 -c 0,255 -o %s 2> /var/tmp/artistic.log",gmicbin,wreliable,params.output_size,wreliable)
             -- print (resizereliablecmd)
             os.execute(resizereliablecmd)
         end
@@ -529,7 +549,7 @@ local function main(params)
         if params.shavex ~= 0 or params.shavey ~= 0 or params.expandx ~= 0 or params.expandy ~= 0 then
             print("--------------------------> shave & expand [shavex/y:" .. img_shave_sizex .. "/" .. img_shave_sizey .. "] [expandx/y:" .. img_expand_sizex .. "/" .. img_expand_sizey .. "]")
             --local expandcmd=string.format("gmic -i %s -div 255 -oneminus -resize %s,%s,1,1,0,0,.5,.5,.5,.5 -resize %s,%s,1,1,0,0,.5,.5,.5,.5 -oneminus -mul 255 -o %s 2> /var/tmp/artistic.log",wreliable,img_shave_sizex,img_shave_sizey,img_expand_sizex,img_expand_sizey,wreliable)
-            local expandcmd=string.format("gmic -i %s -resize %s,%s,1,1,0,0,.5,.5,.5,.5 -resize %s,%s,1,1,0,1,.5,.5,.5,.5 -o %s 2> /var/tmp/artistic.log",wreliable,img_shave_sizex,img_shave_sizey,img_expand_sizex,img_expand_sizey,wreliable)
+            local expandcmd=string.format("%s -i %s -resize %s,%s,1,1,0,0,.5,.5,.5,.5 -resize %s,%s,1,1,0,1,.5,.5,.5,.5 -o %s 2> /var/tmp/artistic.log",gmicbin,wreliable,img_shave_sizex,img_shave_sizey,img_expand_sizex,img_expand_sizey,wreliable)
             -- print (expandcmd)
             os.execute(expandcmd)
         end
@@ -570,13 +590,7 @@ local function main(params)
     img = PutOnGPU(img, params)
     
     -- Run the optimization to stylize the image, save the result to disk
-    -- print("--------------------------> run optimization")
-    runOptimization(params, net, content_losses, style_losses, temporal_losses, img, frameIdx, num_iterations,workingdir,style_image)
-    
-    -- if frameIdx == params.start_number then
-    --  print("--------------------------> firstImg")
-    --  firstImg = img:clone():float()
-    -- end
+    runOptimization(params,net,content_losses,style_losses,temporal_losses,img,frameIdx,num_iterations,workingdir,style_image)
     
     -- Remove this iteration's content and temporal layers
     for i=#losses_indices, 1, -1 do
